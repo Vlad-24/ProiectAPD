@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <mpi.h>
 
 static int ROWS, COLS;
 static int generations;
@@ -146,44 +147,59 @@ static void simulate_serial(uint8_t *initial_grid, uint8_t **out_final_grid)
 
 int main(int argc, char *argv[])
 {
+    int rank, size;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
     if (argc < 3) 
     {
-        printf("Usage: %s input.txt G\n", argv[0]);
+        if (rank == 0)
+            printf("Usage: %s input.txt G\n", argv[0]);
+        MPI_Finalize();
         return 0;
     }
     const char *input_filename = argv[1];
     generations = atoi(argv[2]);
     if (generations < 1)
     {
-        printf("Invalid number of generations\n");
+        if (rank == 0)
+            printf("Invalid number of generations\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
         exit(-1);
     }
-    uint8_t *initial_grid = NULL;
-    load_grid_from_file(input_filename, &initial_grid);
 
-    printf("Rows=%d Cols=%d Generations=%d\n", ROWS, COLS, generations);
+    if (rank == 0)
+    {
+        uint8_t *initial_grid = NULL;
+        load_grid_from_file(input_filename, &initial_grid);
 
-    char output_serial_file[64];
-    char output_parallel_file[64];
-    generate_output_filenames(input_filename, output_serial_file, output_parallel_file);
+        printf("Rows=%d Cols=%d Generations=%d\n", ROWS, COLS, generations);
 
-    struct timespec start, end;
+        char output_serial_file[64];
+        char output_parallel_file[64];
+        generate_output_filenames(input_filename, output_serial_file, output_parallel_file);
 
-    uint8_t *final_grid_serial = NULL;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    simulate_serial(initial_grid, &final_grid_serial);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double serial_duration = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        struct timespec start, end;
 
-    save_grid_to_file(output_serial_file, final_grid_serial);
-    printf("Serial: %.6f s\n", serial_duration);
+        uint8_t *final_grid_serial = NULL;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        simulate_serial(initial_grid, &final_grid_serial);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double serial_duration = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+        save_grid_to_file(output_serial_file, final_grid_serial);
+        printf("Serial: %.6f s\n", serial_duration);
 
 #ifdef DEBUG
-    printf("\nFinal grid (serial):\n");
-    print_grid(final_grid_serial);
+        printf("\nFinal grid (serial):\n");
+        print_grid(final_grid_serial);
 #endif
+        free(initial_grid);
+        free(final_grid_serial);
+    }
 
-    free(initial_grid);
-    free(final_grid_serial);
+    MPI_Finalize();
     return 0;
 }
