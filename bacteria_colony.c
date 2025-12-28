@@ -170,17 +170,22 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
+    uint8_t *initial_grid = NULL;
+    char output_serial_file[64];
+    char output_parallel_file[64];
     if (rank == 0)
     {
-        uint8_t *initial_grid = NULL;
         load_grid_from_file(input_filename, &initial_grid);
-
         printf("Rows=%d Cols=%d Generations=%d\n", ROWS, COLS, generations);
-
-        char output_serial_file[64];
-        char output_parallel_file[64];
         generate_output_filenames(input_filename, output_serial_file, output_parallel_file);
+    }
 
+    MPI_Bcast(&ROWS, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&COLS, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&generations, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (rank == 0)
+    {
         struct timespec start, end;
 
         uint8_t *final_grid_serial = NULL;
