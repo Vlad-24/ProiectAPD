@@ -86,7 +86,7 @@ static void load_grid_from_file(const char *filename, uint8_t **out_grid)
     fclose(file);
 }
 
-static int count_neighbors(uint8_t *grid, int row, int col)
+static int count_neighbors(uint8_t *grid, int rows, int cols, int row, int col)
 {
     static const int drow[8] = {-1, -1, -1,  0, 0,  1, 1, 1};
     static const int dcol[8] = {-1,  0,  1, -1, 1, -1, 0, 1};
@@ -96,9 +96,9 @@ static int count_neighbors(uint8_t *grid, int row, int col)
     {
         int nrow = row + drow[i];
         int ncol = col + dcol[i];
-        if ((nrow >= 0 && nrow < ROWS) && (ncol >= 0 && ncol < COLS))
+        if ((nrow >= 0 && nrow < rows) && (ncol >= 0 && ncol < cols))
         {
-            neighbors += grid[nrow * COLS + ncol];
+            neighbors += grid[nrow * cols + ncol];
         }
     }
     return neighbors;
@@ -127,7 +127,7 @@ static void simulate_serial(uint8_t *initial_grid, uint8_t **out_final_grid)
         {
             for (int col = 0; col < COLS; col++)
             {
-                int neighbors = count_neighbors(current_gen, row, col);
+                int neighbors = count_neighbors(current_gen, ROWS, COLS, row, col);
                 uint8_t is_alive = current_gen[row * COLS + col];
                 next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
             }
@@ -258,6 +258,16 @@ int main(int argc, char *argv[])
                  local_current + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
     exchange_halo_rows(local_current, local_rows, rank, size);
+
+    for (int lr = 1; lr <= local_rows; lr++)
+    {
+        for (int col = 0; col < COLS; col++)
+        {
+            int neighbors = count_neighbors(local_current, local_rows + 2, COLS, lr, col);
+            uint8_t is_alive = local_current[lr * COLS + col];
+            local_next[lr * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+        }
+    }
 
     if (rank == 0)
     {
