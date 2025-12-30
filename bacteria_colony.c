@@ -223,12 +223,12 @@ int main(int argc, char *argv[])
     int end_row = start_row + local_rows;
 
     int elements = (local_rows + 2) * COLS;
-    uint8_t *local_current = calloc(elements, sizeof(uint8_t));
-    uint8_t *local_next = calloc(elements, sizeof(uint8_t));
-    if (!local_current || !local_next)
+    uint8_t *local_current_gen = calloc(elements, sizeof(uint8_t));
+    uint8_t *local_next_gen = calloc(elements, sizeof(uint8_t));
+    if (!local_current_gen || !local_next_gen)
     {
         if (rank == 0) 
-            printf("Memory allocation failed for local_current / local_next\n");
+            printf("Memory allocation failed for local_current_gen / local_next_gen\n");
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -255,18 +255,24 @@ int main(int argc, char *argv[])
     }
 
     MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
-                 local_current + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+                 local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
-    exchange_halo_rows(local_current, local_rows, rank, size);
-
-    for (int lr = 1; lr <= local_rows; lr++)
+    for (int gen = 0; gen < generations; gen++)
     {
-        for (int col = 0; col < COLS; col++)
+        exchange_halo_rows(local_current_gen, local_rows, rank, size);
+
+        for (int row = 1; row <= local_rows; row++)
         {
-            int neighbors = count_neighbors(local_current, local_rows + 2, COLS, lr, col);
-            uint8_t is_alive = local_current[lr * COLS + col];
-            local_next[lr * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+            for (int col = 0; col < COLS; col++)
+            {
+                int neighbors = count_neighbors(local_current_gen, local_rows + 2, COLS, row, col);
+                uint8_t is_alive = local_current_gen[row * COLS + col];
+                local_next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+            }
         }
+        uint8_t *temp = local_current_gen;
+        local_current_gen = local_next_gen;
+        local_next_gen = temp;
     }
 
     if (rank == 0)
@@ -276,8 +282,8 @@ int main(int argc, char *argv[])
         free(initial_grid);
     }
 
-    free(local_current);
-    free(local_next);
+    free(local_current_gen);
+    free(local_next_gen);
     free(final_grid_serial);
     MPI_Finalize();
     return 0;
