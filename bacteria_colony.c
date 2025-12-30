@@ -167,7 +167,6 @@ int main(int argc, char *argv[])
         if (rank == 0)
             printf("Invalid number of generations\n");
         MPI_Abort(MPI_COMM_WORLD, 1);
-        exit(-1);
     }
 
     uint8_t *initial_grid = NULL;
@@ -184,11 +183,10 @@ int main(int argc, char *argv[])
     MPI_Bcast(&COLS, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&generations, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    uint8_t *final_grid_serial = NULL;
     if (rank == 0)
     {
         struct timespec start, end;
-
-        uint8_t *final_grid_serial = NULL;
         clock_gettime(CLOCK_MONOTONIC, &start);
         simulate_serial(initial_grid, &final_grid_serial);
         clock_gettime(CLOCK_MONOTONIC, &end);
@@ -201,8 +199,6 @@ int main(int argc, char *argv[])
         printf("\nFinal grid (serial):\n");
         print_grid(final_grid_serial);
 #endif
-        free(initial_grid);
-        free(final_grid_serial);
     }
 
     int base_rows = ROWS / size;
@@ -212,6 +208,49 @@ int main(int argc, char *argv[])
     int start_row = rank * base_rows + (rank < extra_rows ? rank : extra_rows);
     int end_row = start_row + local_rows;
 
+    int elements = local_rows * COLS;
+    uint8_t *local_grid = (uint8_t *)malloc(elements);
+    if (!local_grid)
+    {
+        if (rank == 0) 
+            printf("Memory allocation failed for local_grid\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    int *send_counts = NULL;
+    int *send_offsets = NULL;
+    uint8_t *send_grid = NULL;
+    if (rank == 0)
+    {
+        send_counts = (int *)malloc(size * sizeof(int));
+        send_offsets = (int *)malloc(size * sizeof(int));
+        if (!send_counts || !send_offsets)
+        {
+            printf("Memory allocation failed for send_counts / send_offsets\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        for (int row = 0; row < size; row++)
+        {
+            int rows_for_rank  = base_rows + (row < extra_rows ? 1 : 0);
+            int start_for_rank = row * base_rows + (row < extra_rows ? row : extra_rows);
+            send_counts[row]  = rows_for_rank * COLS;
+            send_offsets[row] = start_for_rank * COLS;
+        }
+        send_grid = initial_grid;
+    }
+
+    MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
+                 local_grid, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+
+    if (rank == 0)
+    {
+        free(send_counts);
+        free(send_offsets);
+        free(initial_grid);
+    }
+
+    free(local_grid);
+    free(final_grid_serial);
     MPI_Finalize();
     return 0;
 }
