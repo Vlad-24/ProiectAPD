@@ -205,6 +205,13 @@ int main(int argc, char *argv[])
         free(final_grid_serial);
     }
 
+    int base_rows = ROWS / size;
+    int extra_rows = ROWS % size;
+
+    int local_rows = base_rows + (rank < extra_rows ? 1 : 0);
+    int start_row = rank * base_rows + (rank < extra_rows ? rank : extra_rows);
+    int end_row = start_row + local_rows;
+
     MPI_Finalize();
     return 0;
 }
