@@ -208,12 +208,13 @@ int main(int argc, char *argv[])
     int start_row = rank * base_rows + (rank < extra_rows ? rank : extra_rows);
     int end_row = start_row + local_rows;
 
-    int elements = local_rows * COLS;
-    uint8_t *local_grid = (uint8_t *)malloc(elements);
-    if (!local_grid)
+    int elements = (local_rows + 2) * COLS;
+    uint8_t *local_current = calloc(elements, sizeof(uint8_t));
+    uint8_t *local_next = calloc(elements, sizeof(uint8_t));
+    if (!local_current || !local_next)
     {
         if (rank == 0) 
-            printf("Memory allocation failed for local_grid\n");
+            printf("Memory allocation failed for local_current / local_next\n");
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -240,7 +241,7 @@ int main(int argc, char *argv[])
     }
 
     MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
-                 local_grid, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+                 local_current + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
     if (rank == 0)
     {
@@ -249,7 +250,8 @@ int main(int argc, char *argv[])
         free(initial_grid);
     }
 
-    free(local_grid);
+    free(local_current);
+    free(local_next);
     free(final_grid_serial);
     MPI_Finalize();
     return 0;
