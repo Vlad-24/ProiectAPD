@@ -145,6 +145,20 @@ static void simulate_serial(uint8_t *initial_grid, uint8_t **out_final_grid)
     *out_final_grid = current_gen;
 }
 
+static void exchange_halo_rows(uint8_t *local_grid, int local_rows, int rank, int size)
+{
+    int up = (rank == 0) ? MPI_PROC_NULL : (rank - 1);
+    int down = (rank == size - 1) ? MPI_PROC_NULL : (rank + 1);
+
+    MPI_Sendrecv(local_grid + COLS, COLS, MPI_UINT8_T, up, 0,
+                 local_grid, COLS, MPI_UINT8_T, up, 1,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    MPI_Sendrecv(local_grid + local_rows * COLS, COLS, MPI_UINT8_T, down, 1,
+                 local_grid + (local_rows + 1) * COLS, COLS, MPI_UINT8_T, down, 0,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+}
+
 int main(int argc, char *argv[])
 {
     int rank, size;
@@ -242,6 +256,8 @@ int main(int argc, char *argv[])
 
     MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
                  local_current + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+
+    exchange_halo_rows(local_current, local_rows, rank, size);
 
     if (rank == 0)
     {
