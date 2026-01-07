@@ -159,6 +159,97 @@ static void exchange_halo_rows(uint8_t *local_grid, int local_rows, int rank, in
                  MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
+static void simulate_parallel(uint8_t *initial_grid, int rank, int size, uint8_t **out_final_grid)
+{
+    int base_rows = ROWS / size;
+    int extra_rows = ROWS % size;
+
+    int local_rows = base_rows + (rank < extra_rows ? 1 : 0);
+
+    int elements = (local_rows + 2) * COLS;
+    uint8_t *local_current_gen = (uint8_t *)calloc((size_t)elements, sizeof(uint8_t));
+    uint8_t *local_next_gen    = (uint8_t *)calloc((size_t)elements, sizeof(uint8_t));
+    if (!local_current_gen || !local_next_gen)
+    {
+        if (rank == 0)
+            printf("Memory allocation failed for local_current_gen / local_next_gen\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    int *send_counts = NULL;
+    int *send_offsets = NULL;
+    uint8_t *send_grid = NULL;
+
+    if (rank == 0)
+    {
+        send_counts = (int *)malloc((size_t)size * sizeof(int));
+        send_offsets = (int *)malloc((size_t)size * sizeof(int));
+        if (!send_counts || !send_offsets)
+        {
+            printf("Memory allocation failed for send_counts / send_offsets\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
+        for (int row = 0; row < size; row++)
+        {
+            int rows_for_rank  = base_rows + (row < extra_rows ? 1 : 0);
+            int start_for_rank = row * base_rows + (row < extra_rows ? row : extra_rows);
+            send_counts[row]  = rows_for_rank * COLS;
+            send_offsets[row] = start_for_rank * COLS;
+        }
+
+        send_grid = initial_grid;
+    }
+
+    MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T,
+                 local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T,
+                 0, MPI_COMM_WORLD);
+
+    uint8_t *final_grid_parallel = NULL;
+    if (rank == 0)
+    {
+        final_grid_parallel = (uint8_t *)malloc((size_t)ROWS * (size_t)COLS);
+        if (!final_grid_parallel)
+        {
+            printf("Memory allocation failed for final_grid_parallel\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+
+    for (int gen = 0; gen < generations; gen++)
+    {
+        exchange_halo_rows(local_current_gen, local_rows, rank, size);
+
+        for (int row = 1; row <= local_rows; row++)
+        {
+            for (int col = 0; col < COLS; col++)
+            {
+                int neighbors = count_neighbors(local_current_gen, local_rows + 2, COLS, row, col);
+                uint8_t is_alive = local_current_gen[row * COLS + col];
+                local_next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+            }
+        }
+
+        uint8_t *temp = local_current_gen;
+        local_current_gen = local_next_gen;
+        local_next_gen = temp;
+    }
+
+    MPI_Gatherv(local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T,
+                final_grid_parallel, send_counts, send_offsets, MPI_UINT8_T,
+                0, MPI_COMM_WORLD);
+
+    if (rank == 0)
+    {
+        *out_final_grid = final_grid_parallel;
+        free(send_counts);
+        free(send_offsets);
+    }
+
+    free(local_current_gen);
+    free(local_next_gen);
+}
+
 int main(int argc, char *argv[])
 {
     int rank, size;
@@ -209,121 +300,36 @@ int main(int argc, char *argv[])
 
         save_grid_to_file(output_serial_file, final_grid_serial);
         printf("Serial: %.6f s\n", serial_duration);
-
-#ifdef DEBUG
-        printf("\nFinal grid (serial):\n");
-        print_grid(final_grid_serial);
-#endif
     }
 
-    int base_rows = ROWS / size;
-    int extra_rows = ROWS % size;
-
-    int local_rows = base_rows + (rank < extra_rows ? 1 : 0);
-    int start_row = rank * base_rows + (rank < extra_rows ? rank : extra_rows);
-    int end_row = start_row + local_rows;
-
-    int elements = (local_rows + 2) * COLS;
-    uint8_t *local_current_gen = calloc(elements, sizeof(uint8_t));
-    uint8_t *local_next_gen = calloc(elements, sizeof(uint8_t));
-    if (!local_current_gen || !local_next_gen)
-    {
-        if (rank == 0) 
-            printf("Memory allocation failed for local_current_gen / local_next_gen\n");
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-
-    int *send_counts = NULL;
-    int *send_offsets = NULL;
-    uint8_t *send_grid = NULL;
-    if (rank == 0)
-    {
-        send_counts = (int *)malloc(size * sizeof(int));
-        send_offsets = (int *)malloc(size * sizeof(int));
-        if (!send_counts || !send_offsets)
-        {
-            printf("Memory allocation failed for send_counts / send_offsets\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-        for (int row = 0; row < size; row++)
-        {
-            int rows_for_rank  = base_rows + (row < extra_rows ? 1 : 0);
-            int start_for_rank = row * base_rows + (row < extra_rows ? row : extra_rows);
-            send_counts[row]  = rows_for_rank * COLS;
-            send_offsets[row] = start_for_rank * COLS;
-        }
-        send_grid = initial_grid;
-    }
+    uint8_t *final_grid_parallel = NULL;
 
     MPI_Barrier(MPI_COMM_WORLD);
-    
     double start = MPI_Wtime();
-    MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
-        local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
-    
-    uint8_t *final_grid_parallel = NULL;
-    if (rank == 0)
-    {
-        final_grid_parallel = (uint8_t *)malloc((size_t)ROWS * (size_t)COLS);
-        if (!final_grid_parallel)
-        {
-            printf("Memory allocation failed for final_grid_parallel\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-    }
-
-    for (int gen = 0; gen < generations; gen++)
-    {
-        exchange_halo_rows(local_current_gen, local_rows, rank, size);
-
-        for (int row = 1; row <= local_rows; row++)
-        {
-            for (int col = 0; col < COLS; col++)
-            {
-                int neighbors = count_neighbors(local_current_gen, local_rows + 2, COLS, row, col);
-                uint8_t is_alive = local_current_gen[row * COLS + col];
-                local_next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
-            }
-        }
-        uint8_t *temp = local_current_gen;
-        local_current_gen = local_next_gen;
-        local_next_gen = temp;
-    }
-    MPI_Gatherv(local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T,
-                final_grid_parallel, send_counts, send_offsets, MPI_UINT8_T,
-                0, MPI_COMM_WORLD);
-
+    simulate_parallel(initial_grid, rank, size, &final_grid_parallel);
+    MPI_Barrier(MPI_COMM_WORLD);
     double stop = MPI_Wtime();
-    double mpi_local = stop - start;
-    double mpi_duration;
-    MPI_Reduce(&mpi_local, &mpi_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    double local_time = stop - start;
+    double parallel_duration;
+    MPI_Reduce(&local_time, &parallel_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
     if (rank == 0)
     {
         save_grid_to_file(output_parallel_file, final_grid_parallel);
-        printf("Parallel: %.6f s\n", mpi_duration);
-    }
+        printf("Parallel: %.6f s\n", parallel_duration);
 
-    if (rank == 0)
-    {
         int elements = ROWS * COLS;
         int grids_are_identical = (memcmp(final_grid_serial, final_grid_parallel, elements) == 0);
         if (!grids_are_identical) printf("Serial and parallel are not the same\n");
 
-        printf("Speedup: %.2fx\n", serial_duration / mpi_duration);
-    }
+        printf("Speedup: %.2fx\n", serial_duration / parallel_duration);
 
-    if (rank == 0)
-    {
-        free(send_counts);
-        free(send_offsets);
         free(initial_grid);
+        free(final_grid_serial);
+        free(final_grid_parallel);
     }
-
-    free(local_current_gen);
-    free(local_next_gen);
-    free(final_grid_serial);
-    free(final_grid_parallel);
+    
     MPI_Finalize();
     return 0;
 }
