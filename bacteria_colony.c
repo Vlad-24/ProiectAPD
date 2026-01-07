@@ -309,6 +309,8 @@ int main(int argc, char *argv[])
         int elements = ROWS * COLS;
         int grids_are_identical = (memcmp(final_grid_serial, final_grid_parallel, elements) == 0);
         if (!grids_are_identical) printf("Serial and parallel are not the same\n");
+
+        printf("Speedup: %.2fx\n", serial_duration / mpi_duration);
     }
 
     if (rank == 0)
