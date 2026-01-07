@@ -197,6 +197,7 @@ int main(int argc, char *argv[])
     MPI_Bcast(&COLS, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&generations, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    double serial_duration;
     uint8_t *final_grid_serial = NULL;
     if (rank == 0)
     {
@@ -204,7 +205,7 @@ int main(int argc, char *argv[])
         clock_gettime(CLOCK_MONOTONIC, &start);
         simulate_serial(initial_grid, &final_grid_serial);
         clock_gettime(CLOCK_MONOTONIC, &end);
-        double serial_duration = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        serial_duration = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
         save_grid_to_file(output_serial_file, final_grid_serial);
         printf("Serial: %.6f s\n", serial_duration);
@@ -254,8 +255,22 @@ int main(int argc, char *argv[])
         send_grid = initial_grid;
     }
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    double start = MPI_Wtime();
     MPI_Scatterv(send_grid, send_counts, send_offsets, MPI_UINT8_T, 
-                 local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+        local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+    
+    uint8_t *final_grid_parallel = NULL;
+    if (rank == 0)
+    {
+        final_grid_parallel = (uint8_t *)malloc((size_t)ROWS * (size_t)COLS);
+        if (!final_grid_parallel)
+        {
+            printf("Memory allocation failed for final_grid_parallel\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
 
     for (int gen = 0; gen < generations; gen++)
     {
@@ -274,6 +289,20 @@ int main(int argc, char *argv[])
         local_current_gen = local_next_gen;
         local_next_gen = temp;
     }
+    MPI_Gatherv(local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T,
+                final_grid_parallel, send_counts, send_offsets, MPI_UINT8_T,
+                0, MPI_COMM_WORLD);
+
+    double stop = MPI_Wtime();
+    double mpi_local = stop - start;
+    double mpi_duration;
+    MPI_Reduce(&mpi_local, &mpi_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    if (rank == 0)
+    {
+        save_grid_to_file(output_parallel_file, final_grid_parallel);
+        printf("Parallel: %.6f s\n", mpi_duration);
+    }
 
     if (rank == 0)
     {
@@ -285,6 +314,7 @@ int main(int argc, char *argv[])
     free(local_current_gen);
     free(local_next_gen);
     free(final_grid_serial);
+    free(final_grid_parallel);
     MPI_Finalize();
     return 0;
 }
