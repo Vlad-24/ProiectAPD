@@ -86,6 +86,13 @@ static void load_grid_from_file(const char *filename, uint8_t **out_grid)
     fclose(file);
 }
 
+static void swap_buffers(uint8_t **a, uint8_t **b)
+{
+    uint8_t *tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
 static int count_neighbors(uint8_t *grid, int rows, int cols, int row, int col)
 {
     static const int drow[8] = {-1, -1, -1,  0, 0,  1, 1, 1};
@@ -102,6 +109,20 @@ static int count_neighbors(uint8_t *grid, int rows, int cols, int row, int col)
         }
     }
     return neighbors;
+}
+
+static void compute_next_generation(uint8_t *current, uint8_t *next, int rows, int cols,
+                                   int row_start, int row_end)
+{
+    for (int row = row_start; row <= row_end; row++)
+    {
+        for (int col = 0; col < cols; col++)
+        {
+            int neighbors = count_neighbors(current, rows, cols, row, col);
+            uint8_t is_alive = current[row * cols + col];
+            next[row * cols + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+        }
+    }
 }
 
 static void simulate_serial(uint8_t *initial_grid, uint8_t **out_final_grid)
@@ -123,18 +144,8 @@ static void simulate_serial(uint8_t *initial_grid, uint8_t **out_final_grid)
 
     for (int gen = 0; gen < generations; gen++)
     {
-        for (int row = 0; row < ROWS; row++)
-        {
-            for (int col = 0; col < COLS; col++)
-            {
-                int neighbors = count_neighbors(current_gen, ROWS, COLS, row, col);
-                uint8_t is_alive = current_gen[row * COLS + col];
-                next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
-            }
-        }
-        uint8_t *temp = current_gen;
-        current_gen = next_gen;
-        next_gen = temp;
+        compute_next_generation(current_gen, next_gen, ROWS, COLS, 0, ROWS - 1);
+        swap_buffers(&current_gen,&next_gen);
 
 #ifdef DEBUG
         printf("After gen %d:\n", gen + 1);
@@ -219,20 +230,8 @@ static void simulate_parallel(uint8_t *initial_grid, int rank, int size, uint8_t
     for (int gen = 0; gen < generations; gen++)
     {
         exchange_halo_rows(local_current_gen, local_rows, rank, size);
-
-        for (int row = 1; row <= local_rows; row++)
-        {
-            for (int col = 0; col < COLS; col++)
-            {
-                int neighbors = count_neighbors(local_current_gen, local_rows + 2, COLS, row, col);
-                uint8_t is_alive = local_current_gen[row * COLS + col];
-                local_next_gen[row * COLS + col] = is_alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
-            }
-        }
-
-        uint8_t *temp = local_current_gen;
-        local_current_gen = local_next_gen;
-        local_next_gen = temp;
+        compute_next_generation(local_current_gen, local_next_gen, local_rows + 2, COLS, 1, local_rows);
+        swap_buffers(&local_current_gen,&local_next_gen);
     }
 
     MPI_Gatherv(local_current_gen + COLS, local_rows * COLS, MPI_UINT8_T,
